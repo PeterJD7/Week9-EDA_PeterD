@@ -396,3 +396,74 @@ if len(df_s3_model) > 5:
         st.success("✅ No high-cost S3 bucket clusters detected.")
 else:
     st.warning("Not enough S3 data for clustering model.")
+
+# ============================================================
+# 8. SIMPLE CHATBOT FOR DATA INSIGHTS
+# ============================================================
+import re
+
+st.header("💬 Ask the AWS Assistant")
+
+# Maintain chat history
+if "messages" not in st.session_state:
+    st.session_state["messages"] = [
+        {"role": "assistant", "content": "Hello! Ask me anything about your EC2 or S3 data 👋"}
+    ]
+
+# Display previous messages
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# User input
+if prompt := st.chat_input("Ask about EC2, S3, costs, or storage patterns..."):
+    # Display user message
+    st.chat_message("user").markdown(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    # Default response
+    response = "Hmm, I’m not sure about that. Try asking about EC2 or S3 costs, storage, or utilization."
+
+    # Simple intent detection (regex-based)
+    q = prompt.lower()
+
+    # --- EC2 Insights ---
+    if "expensive" in q and "ec2" in q:
+        top_ec2 = ec2_filtered.nlargest(1, "CostUSD")[["ResourceId", "Region", "CostUSD"]]
+        rid, region, cost = top_ec2.iloc[0]
+        response = f"The most expensive EC2 instance is `{rid}` in region `{region}` costing **${cost:.2f}** per month."
+
+    elif "average" in q and "ec2" in q and "cost" in q:
+        avg_cost = ec2_filtered["CostUSD"].mean()
+        response = f"The average EC2 instance cost is **${avg_cost:.2f}** per month."
+
+    elif "cpu" in q and "high" in q:
+        high_cpu = ec2_filtered[ec2_filtered["CPUUtilization"] > 80]
+        if not high_cpu.empty:
+            response = f"There are {len(high_cpu)} EC2 instances with CPU utilization over 80%."
+        else:
+            response = "No EC2 instances are currently above 80% CPU utilization."
+
+    # --- S3 Insights ---
+    elif "largest" in q and "s3" in q:
+        top_s3 = s3_filtered.nlargest(1, "TotalSizeGB")[["BucketName", "Region", "TotalSizeGB"]]
+        name, region, size = top_s3.iloc[0]
+        response = f"The largest S3 bucket is `{name}` in `{region}` with **{size:.1f} GB**."
+
+    elif "unencrypted" in q or "encryption" in q:
+        unencrypted = s3_filtered[s3_filtered["Encryption"].isin(["None", ""])]
+        if not unencrypted.empty:
+            response = f"There are {len(unencrypted)} unencrypted S3 buckets. For example: `{unencrypted.iloc[0]['BucketName']}`."
+        else:
+            response = "All S3 buckets appear to have encryption enabled."
+
+    elif "cost" in q and "s3" in q and "region" in q:
+        s3_costs = s3_filtered.groupby("Region")["CostUSD"].sum().reset_index()
+        top_region = s3_costs.loc[s3_costs["CostUSD"].idxmax()]
+        response = f"The region `{top_region['Region']}` has the highest total S3 cost at **${top_region['CostUSD']:.2f}**."
+
+    # Show chatbot response
+    with st.chat_message("assistant"):
+        st.markdown(response)
+
+    st.session_state.messages.append({"role": "assistant", "content": response})
