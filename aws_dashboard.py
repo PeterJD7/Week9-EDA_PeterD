@@ -9,6 +9,7 @@ from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 
+
 # -------------------------------------
 # 1. LOAD DATA
 # -------------------------------------
@@ -288,3 +289,110 @@ if len(s3_model) > 3:
     st.info(f"💡 Buckets in Cluster {high_cost_cluster} have the highest average cost — consider deeper analysis.")
 else:
     st.warning("Not enough S3 data to perform clustering.")
+
+
+# ============================================================
+# 7. MACHINE-LEARNING–ENHANCED OPTIMIZATION RECOMMENDATIONS
+# ============================================================
+st.header("🧠 Intelligent ML-Based Recommendations")
+
+# ------------------------------------------------------------
+# 🔹 EC2: Predictive Cost Analysis (Regression)
+# ------------------------------------------------------------
+st.subheader("💰 EC2 Predictive Cost Analysis")
+
+features = ["CPUUtilization", "MemoryUtilization", "NetworkIn_Bps", "NetworkOut_Bps"]
+df_ec2_model = ec2_filtered.dropna(subset=features + ["CostUSD"])
+
+if len(df_ec2_model) > 10:
+    X = df_ec2_model[features]
+    y = df_ec2_model["CostUSD"]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    reg = LinearRegression()
+    reg.fit(X_train, y_train)
+    y_pred = reg.predict(X_test)
+    mae = mean_absolute_error(y_test, y_pred)
+
+    df_ec2_model["PredictedCost"] = reg.predict(X)
+
+    # Calculate cost deviation ratio
+    df_ec2_model["Deviation"] = (df_ec2_model["PredictedCost"] - df_ec2_model["CostUSD"]) / df_ec2_model["CostUSD"] * 100
+    high_risk = df_ec2_model[df_ec2_model["Deviation"] > 15]
+
+    st.metric("Model Mean Absolute Error", f"${mae:.2f}")
+    st.metric("At-Risk EC2 Instances", len(high_risk))
+
+    # Visualization of predicted vs actual cost
+    fig, ax = plt.subplots()
+    ax.scatter(df_ec2_model["CostUSD"], df_ec2_model["PredictedCost"], alpha=0.7)
+    ax.plot([df_ec2_model["CostUSD"].min(), df_ec2_model["CostUSD"].max()],
+            [df_ec2_model["CostUSD"].min(), df_ec2_model["CostUSD"].max()],
+            "r--", label="Perfect Fit")
+    ax.set_xlabel("Actual Cost ($)")
+    ax.set_ylabel("Predicted Cost ($)")
+    ax.set_title("EC2 Predicted vs Actual Cost")
+    ax.legend()
+    st.pyplot(fig)
+
+    # Highlight and recommend actions
+    if not high_risk.empty:
+        st.warning("⚠️ EC2 instances likely to exceed expected cost:")
+        st.dataframe(high_risk[["ResourceId", "Region", "InstanceType", "CostUSD", "PredictedCost", "Deviation"]])
+
+        sample = high_risk.iloc[0]
+        st.info(
+            f"💡 **Recommendation:** Instance `{sample['ResourceId']}` in `{sample['Region']}` "
+            f"({sample['InstanceType']}`) shows a **{sample['Deviation']:.1f}% higher predicted cost**. "
+            f"Investigate high utilization or consider migrating to a smaller instance type or Savings Plan."
+        )
+    else:
+        st.success("✅ No EC2 instances predicted to exceed cost expectations.")
+else:
+    st.warning("Not enough EC2 data to train predictive model.")
+
+
+# ------------------------------------------------------------
+# 🔹 S3: Pattern Detection via Clustering
+# ------------------------------------------------------------
+st.subheader("📦 S3 Bucket Pattern Clustering")
+
+features = ["CostUSD", "TotalSizeGB", "ObjectCount"]
+df_s3_model = s3_filtered.dropna(subset=features)
+
+if len(df_s3_model) > 5:
+    X = df_s3_model[features]
+    X_scaled = StandardScaler().fit_transform(X)
+
+    kmeans = KMeans(n_clusters=3, random_state=42)
+    df_s3_model["Cluster"] = kmeans.fit_predict(X_scaled)
+
+    # Cluster insights
+    cluster_means = df_s3_model.groupby("Cluster")[["CostUSD", "TotalSizeGB"]].mean()
+    high_cost_cluster = cluster_means["CostUSD"].idxmax()
+    costly_buckets = df_s3_model[df_s3_model["Cluster"] == high_cost_cluster]
+
+    # Visualization
+    fig, ax = plt.subplots()
+    sns.scatterplot(data=df_s3_model, x="TotalSizeGB", y="CostUSD", hue="Cluster", palette="Set2", ax=ax)
+    ax.set_title("S3 Bucket Cost Clustering")
+    st.pyplot(fig)
+
+    st.metric("High-Cost Cluster ID", int(high_cost_cluster))
+    st.metric("Buckets in High-Cost Cluster", len(costly_buckets))
+
+    if not costly_buckets.empty:
+        st.warning("⚠️ High-cost S3 buckets detected:")
+        st.dataframe(costly_buckets[["BucketName", "Region", "CostUSD", "TotalSizeGB", "ObjectCount", "Cluster"]])
+
+        sample_bucket = costly_buckets.iloc[0]
+        st.info(
+            f"💡 **Recommendation:** Bucket `{sample_bucket['BucketName']}` in `{sample_bucket['Region']}` "
+            f"is in a high-cost cluster with average size {sample_bucket['TotalSizeGB']:.1f} GB. "
+            f"Consider lifecycle rules, storage class transitions (e.g., Glacier), "
+            f"or deleting stale objects to reduce cost."
+        )
+    else:
+        st.success("✅ No high-cost S3 bucket clusters detected.")
+else:
+    st.warning("Not enough S3 data for clustering model.")
