@@ -9,7 +9,6 @@ from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 
-
 # -------------------------------------
 # 1. LOAD DATA
 # -------------------------------------
@@ -49,116 +48,76 @@ s3_filtered = s3[(s3["Region"].isin(region_filter_s3)) & (s3["StorageClass"].isi
 
 st.success(f"Showing {len(ec2_filtered)} EC2 instances and {len(s3_filtered)} S3 buckets after filtering.")
 
-# -------------------------------------
-# 3. DATA CLEANING & OUTLIERS
-# -------------------------------------
-ec2_filtered.fillna({"CPUUtilization": ec2_filtered["CPUUtilization"].mean(),
-                     "MemoryUtilization": ec2_filtered["MemoryUtilization"].mean()}, inplace=True)
-s3_filtered.fillna({"TotalSizeGB": s3_filtered["TotalSizeGB"].mean()}, inplace=True)
+# ============================================================
+# 8. SIMPLE CHATBOT FOR DATA INSIGHTS
+# ============================================================
+import re
 
-# -------------------------------------
-# 4. MAIN VISUALIZATIONS
-# -------------------------------------
-st.header("📊 General Visualizations")
+st.header("💬 Ask the AWS Assistant")
 
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader("EC2: CPU Utilization Histogram")
-    fig, ax = plt.subplots()
-    sns.histplot(ec2_filtered["CPUUtilization"], bins=20, kde=True, ax=ax, color="skyblue")
-    st.pyplot(fig)
+# Maintain chat history
+if "messages" not in st.session_state:
+    st.session_state["messages"] = [
+        {"role": "assistant", "content": "Hello! Ask me anything about your EC2 or S3 data 👋"}
+    ]
 
-with col2:
-    st.subheader("EC2: CPU vs Cost Scatter")
-    fig, ax = plt.subplots()
-    sns.scatterplot(data=ec2_filtered, x="CPUUtilization", y="CostUSD", hue="Region", ax=ax)
-    st.pyplot(fig)
+# Display previous messages
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-col3, col4 = st.columns(2)
-with col3:
-    st.subheader("S3: Total Storage by Region")
-    s3_region_storage = s3_filtered.groupby("Region")["TotalSizeGB"].sum().sort_values(ascending=False)
-    st.bar_chart(s3_region_storage)
+# User input
+if prompt := st.chat_input("Ask about EC2, S3, costs, or storage patterns..."):
+    # Display user message
+    st.chat_message("user").markdown(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
 
-with col4:
-    st.subheader("S3: Cost vs Storage Scatter")
-    fig, ax = plt.subplots()
-    sns.scatterplot(data=s3_filtered, x="TotalSizeGB", y="CostUSD", hue="Region", ax=ax)
-    st.pyplot(fig)
+    # Default response
+    response = "Hmm, I’m not sure about that. Try asking about EC2 or S3 costs, storage, or utilization."
 
-# -------------------------------------
-# 5. INSIGHTS & METRICS VISUALIZED
-# -------------------------------------
-st.header("🔍 Insights & Metrics")
+    # Simple intent detection (regex-based)
+    q = prompt.lower()
 
-col5, col6 = st.columns(2)
-with col5:
-    st.subheader("Top 5 Most Expensive EC2 Instances")
-    top_ec2 = ec2_filtered.nlargest(5, "CostUSD")[["ResourceId", "Region", "CostUSD", "InstanceType"]]
-    fig, ax = plt.subplots()
-    sns.barplot(data=top_ec2, x="CostUSD", y="ResourceId", hue="Region", ax=ax)
-    ax.set_xlabel("Cost (USD)")
-    st.pyplot(fig)
+    # --- EC2 Insights ---
+    if "expensive" in q and "ec2" in q:
+        top_ec2 = ec2_filtered.nlargest(1, "CostUSD")[["ResourceId", "Region", "CostUSD"]]
+        rid, region, cost = top_ec2.iloc[0]
+        response = f"The most expensive EC2 instance is `{rid}` in region `{region}` costing **${cost:.2f}** per month."
 
-with col6:
-    st.subheader("Top 5 Largest S3 Buckets")
-    top_s3 = s3_filtered.nlargest(5, "TotalSizeGB")[["BucketName", "Region", "TotalSizeGB", "CostUSD"]]
-    fig, ax = plt.subplots()
-    sns.barplot(data=top_s3, x="TotalSizeGB", y="BucketName", hue="Region", ax=ax)
-    ax.set_xlabel("Total Size (GB)")
-    st.pyplot(fig)
+    elif "average" in q and "ec2" in q and "cost" in q:
+        avg_cost = ec2_filtered["CostUSD"].mean()
+        response = f"The average EC2 instance cost is **${avg_cost:.2f}** per month."
 
-col7, col8 = st.columns(2)
-with col7:
-    st.subheader("Average EC2 Cost per Region")
-    avg_ec2_cost_region = ec2_filtered.groupby("Region")["CostUSD"].mean().round(2).reset_index()
-    fig, ax = plt.subplots()
-    sns.barplot(data=avg_ec2_cost_region, x="Region", y="CostUSD", ax=ax, palette="Blues_d")
-    ax.set_ylabel("Avg Cost (USD)")
-    st.pyplot(fig)
+    elif "cpu" in q and "high" in q:
+        high_cpu = ec2_filtered[ec2_filtered["CPUUtilization"] > 80]
+        if not high_cpu.empty:
+            response = f"There are {len(high_cpu)} EC2 instances with CPU utilization over 80%."
+        else:
+            response = "No EC2 instances are currently above 80% CPU utilization."
 
-with col8:
-    st.subheader("Total S3 Storage per Region")
-    total_s3_storage_region = s3_filtered.groupby("Region")["TotalSizeGB"].sum().reset_index()
-    fig, ax = plt.subplots()
-    sns.barplot(data=total_s3_storage_region, x="Region", y="TotalSizeGB", ax=ax, palette="Greens_d")
-    ax.set_ylabel("Total Storage (GB)")
-    st.pyplot(fig)
+    # --- S3 Insights ---
+    elif "largest" in q and "s3" in q:
+        top_s3 = s3_filtered.nlargest(1, "TotalSizeGB")[["BucketName", "Region", "TotalSizeGB"]]
+        name, region, size = top_s3.iloc[0]
+        response = f"The largest S3 bucket is `{name}` in `{region}` with **{size:.1f} GB**."
 
-# -------------------------------------
-# 6. DYNAMIC OPTIMIZATION INSIGHTS + VISUALS
-# -------------------------------------
-st.header("⚙️ Optimization Insights (Dynamic & Visual)")
+    elif "unencrypted" in q or "encryption" in q:
+        unencrypted = s3_filtered[s3_filtered["Encryption"].isin(["None", ""])]
+        if not unencrypted.empty:
+            response = f"There are {len(unencrypted)} unencrypted S3 buckets. For example: `{unencrypted.iloc[0]['BucketName']}`."
+        else:
+            response = "All S3 buckets appear to have encryption enabled."
 
-# =============================
-# 🖥️ EC2 OPTIMIZATION
-# =============================
-st.subheader("🖥️ EC2 Optimization Opportunities")
+    elif "cost" in q and "s3" in q and "region" in q:
+        s3_costs = s3_filtered.groupby("Region")["CostUSD"].sum().reset_index()
+        top_region = s3_costs.loc[s3_costs["CostUSD"].idxmax()]
+        response = f"The region `{top_region['Region']}` has the highest total S3 cost at **${top_region['CostUSD']:.2f}**."
 
-cost_threshold = ec2_filtered["CostUSD"].quantile(0.75)
-underutilized = ec2_filtered[
-    (ec2_filtered["CPUUtilization"] < 40) & (ec2_filtered["CostUSD"] > cost_threshold)
-]
+    # Show chatbot response
+    with st.chat_message("assistant"):
+        st.markdown(response)
 
-if not underutilized.empty:
-    st.markdown(f"**{len(underutilized)} EC2 instances** appear underutilized but expensive.")
-    st.dataframe(underutilized[["ResourceId", "Region", "InstanceType", "CostUSD", "CPUUtilization"]])
-
-    # Visualization: EC2 underutilized
-    fig, ax = plt.subplots()
-    sns.scatterplot(data=ec2_filtered, x="CPUUtilization", y="CostUSD", hue="Region", ax=ax)
-    sns.scatterplot(data=underutilized, x="CPUUtilization", y="CostUSD", color="red", s=100, label="Underutilized")
-    ax.axvline(40, color="orange", linestyle="--", label="40% Utilization Threshold")
-    ax.set_title("EC2 Cost vs CPU Utilization (Optimization Zone)")
-    st.pyplot(fig)
-
-    st.info(
-        f"💡 These instances have low CPU (<40%) but are in the top 25% of costs. "
-        f"Example: `{underutilized.iloc[0]['ResourceId']}` in `{underutilized.iloc[0]['Region']}` "
-        f"({underutilized.iloc[0]['InstanceType']}`) could be right-sized or converted to Spot to cut cost."
-    )
-else:
-    st.success("✅ No underutilized high-cost EC2 instances detected based on current filters.")
+    st.session_state.messages.append({"role": "assistant", "content": response})
 
 # =============================
 # 🗄️ S3 OPTIMIZATION
@@ -397,73 +356,114 @@ if len(df_s3_model) > 5:
 else:
     st.warning("Not enough S3 data for clustering model.")
 
-# ============================================================
-# 8. SIMPLE CHATBOT FOR DATA INSIGHTS
-# ============================================================
-import re
+# -------------------------------------
+# 4. MAIN VISUALIZATIONS
+# -------------------------------------
+st.header("📊 General Visualizations")
 
-st.header("💬 Ask the AWS Assistant")
+col1, col2 = st.columns(2)
+with col1:
+    st.subheader("EC2: CPU Utilization Histogram")
+    fig, ax = plt.subplots()
+    sns.histplot(ec2_filtered["CPUUtilization"], bins=20, kde=True, ax=ax, color="skyblue")
+    st.pyplot(fig)
 
-# Maintain chat history
-if "messages" not in st.session_state:
-    st.session_state["messages"] = [
-        {"role": "assistant", "content": "Hello! Ask me anything about your EC2 or S3 data 👋"}
-    ]
+with col2:
+    st.subheader("EC2: CPU vs Cost Scatter")
+    fig, ax = plt.subplots()
+    sns.scatterplot(data=ec2_filtered, x="CPUUtilization", y="CostUSD", hue="Region", ax=ax)
+    st.pyplot(fig)
 
-# Display previous messages
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+col3, col4 = st.columns(2)
+with col3:
+    st.subheader("S3: Total Storage by Region")
+    s3_region_storage = s3_filtered.groupby("Region")["TotalSizeGB"].sum().sort_values(ascending=False)
+    st.bar_chart(s3_region_storage)
 
-# User input
-if prompt := st.chat_input("Ask about EC2, S3, costs, or storage patterns..."):
-    # Display user message
-    st.chat_message("user").markdown(prompt)
-    st.session_state.messages.append({"role": "user", "content": prompt})
+with col4:
+    st.subheader("S3: Cost vs Storage Scatter")
+    fig, ax = plt.subplots()
+    sns.scatterplot(data=s3_filtered, x="TotalSizeGB", y="CostUSD", hue="Region", ax=ax)
+    st.pyplot(fig)
 
-    # Default response
-    response = "Hmm, I’m not sure about that. Try asking about EC2 or S3 costs, storage, or utilization."
+# -------------------------------------
+# 5. INSIGHTS & METRICS VISUALIZED
+# -------------------------------------
+st.header("🔍 Insights & Metrics")
 
-    # Simple intent detection (regex-based)
-    q = prompt.lower()
+col5, col6 = st.columns(2)
+with col5:
+    st.subheader("Top 5 Most Expensive EC2 Instances")
+    top_ec2 = ec2_filtered.nlargest(5, "CostUSD")[["ResourceId", "Region", "CostUSD", "InstanceType"]]
+    fig, ax = plt.subplots()
+    sns.barplot(data=top_ec2, x="CostUSD", y="ResourceId", hue="Region", ax=ax)
+    ax.set_xlabel("Cost (USD)")
+    st.pyplot(fig)
 
-    # --- EC2 Insights ---
-    if "expensive" in q and "ec2" in q:
-        top_ec2 = ec2_filtered.nlargest(1, "CostUSD")[["ResourceId", "Region", "CostUSD"]]
-        rid, region, cost = top_ec2.iloc[0]
-        response = f"The most expensive EC2 instance is `{rid}` in region `{region}` costing **${cost:.2f}** per month."
+with col6:
+    st.subheader("Top 5 Largest S3 Buckets")
+    top_s3 = s3_filtered.nlargest(5, "TotalSizeGB")[["BucketName", "Region", "TotalSizeGB", "CostUSD"]]
+    fig, ax = plt.subplots()
+    sns.barplot(data=top_s3, x="TotalSizeGB", y="BucketName", hue="Region", ax=ax)
+    ax.set_xlabel("Total Size (GB)")
+    st.pyplot(fig)
 
-    elif "average" in q and "ec2" in q and "cost" in q:
-        avg_cost = ec2_filtered["CostUSD"].mean()
-        response = f"The average EC2 instance cost is **${avg_cost:.2f}** per month."
+col7, col8 = st.columns(2)
+with col7:
+    st.subheader("Average EC2 Cost per Region")
+    avg_ec2_cost_region = ec2_filtered.groupby("Region")["CostUSD"].mean().round(2).reset_index()
+    fig, ax = plt.subplots()
+    sns.barplot(data=avg_ec2_cost_region, x="Region", y="CostUSD", ax=ax, palette="Blues_d")
+    ax.set_ylabel("Avg Cost (USD)")
+    st.pyplot(fig)
 
-    elif "cpu" in q and "high" in q:
-        high_cpu = ec2_filtered[ec2_filtered["CPUUtilization"] > 80]
-        if not high_cpu.empty:
-            response = f"There are {len(high_cpu)} EC2 instances with CPU utilization over 80%."
-        else:
-            response = "No EC2 instances are currently above 80% CPU utilization."
+with col8:
+    st.subheader("Total S3 Storage per Region")
+    total_s3_storage_region = s3_filtered.groupby("Region")["TotalSizeGB"].sum().reset_index()
+    fig, ax = plt.subplots()
+    sns.barplot(data=total_s3_storage_region, x="Region", y="TotalSizeGB", ax=ax, palette="Greens_d")
+    ax.set_ylabel("Total Storage (GB)")
+    st.pyplot(fig)
 
-    # --- S3 Insights ---
-    elif "largest" in q and "s3" in q:
-        top_s3 = s3_filtered.nlargest(1, "TotalSizeGB")[["BucketName", "Region", "TotalSizeGB"]]
-        name, region, size = top_s3.iloc[0]
-        response = f"The largest S3 bucket is `{name}` in `{region}` with **{size:.1f} GB**."
+# -------------------------------------
+# 6. DYNAMIC OPTIMIZATION INSIGHTS + VISUALS
+# -------------------------------------
+st.header("⚙️ Optimization Insights (Dynamic & Visual)")
 
-    elif "unencrypted" in q or "encryption" in q:
-        unencrypted = s3_filtered[s3_filtered["Encryption"].isin(["None", ""])]
-        if not unencrypted.empty:
-            response = f"There are {len(unencrypted)} unencrypted S3 buckets. For example: `{unencrypted.iloc[0]['BucketName']}`."
-        else:
-            response = "All S3 buckets appear to have encryption enabled."
+# =============================
+# 🖥️ EC2 OPTIMIZATION
+# =============================
+st.subheader("🖥️ EC2 Optimization Opportunities")
 
-    elif "cost" in q and "s3" in q and "region" in q:
-        s3_costs = s3_filtered.groupby("Region")["CostUSD"].sum().reset_index()
-        top_region = s3_costs.loc[s3_costs["CostUSD"].idxmax()]
-        response = f"The region `{top_region['Region']}` has the highest total S3 cost at **${top_region['CostUSD']:.2f}**."
+cost_threshold = ec2_filtered["CostUSD"].quantile(0.75)
+underutilized = ec2_filtered[
+    (ec2_filtered["CPUUtilization"] < 40) & (ec2_filtered["CostUSD"] > cost_threshold)
+]
 
-    # Show chatbot response
-    with st.chat_message("assistant"):
-        st.markdown(response)
+if not underutilized.empty:
+    st.markdown(f"**{len(underutilized)} EC2 instances** appear underutilized but expensive.")
+    st.dataframe(underutilized[["ResourceId", "Region", "InstanceType", "CostUSD", "CPUUtilization"]])
 
-    st.session_state.messages.append({"role": "assistant", "content": response})
+    # Visualization: EC2 underutilized
+    fig, ax = plt.subplots()
+    sns.scatterplot(data=ec2_filtered, x="CPUUtilization", y="CostUSD", hue="Region", ax=ax)
+    sns.scatterplot(data=underutilized, x="CPUUtilization", y="CostUSD", color="red", s=100, label="Underutilized")
+    ax.axvline(40, color="orange", linestyle="--", label="40% Utilization Threshold")
+    ax.set_title("EC2 Cost vs CPU Utilization (Optimization Zone)")
+    st.pyplot(fig)
+
+    st.info(
+        f"💡 These instances have low CPU (<40%) but are in the top 25% of costs. "
+        f"Example: `{underutilized.iloc[0]['ResourceId']}` in `{underutilized.iloc[0]['Region']}` "
+        f"({underutilized.iloc[0]['InstanceType']}`) could be right-sized or converted to Spot to cut cost."
+    )
+else:
+    st.success("✅ No underutilized high-cost EC2 instances detected based on current filters.")
+
+
+# -------------------------------------
+# 3. DATA CLEANING & OUTLIERS
+# -------------------------------------
+ec2_filtered.fillna({"CPUUtilization": ec2_filtered["CPUUtilization"].mean(),
+                     "MemoryUtilization": ec2_filtered["MemoryUtilization"].mean()}, inplace=True)
+s3_filtered.fillna({"TotalSizeGB": s3_filtered["TotalSizeGB"].mean()}, inplace=True)
