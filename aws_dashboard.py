@@ -6,6 +6,8 @@ import seaborn as sns
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
 
 # -------------------------------------
 # 1. LOAD DATA
@@ -259,3 +261,30 @@ if len(df_model) > 5:
 
 else:
     st.warning("Not enough EC2 data for model training.")
+
+
+st.header("📦 S3 Bucket Pattern Clustering")
+
+features = ["CostUSD", "TotalSizeGB", "ObjectCount"]
+s3_model = s3_filtered.dropna(subset=features)
+
+if len(s3_model) > 3:
+    X = s3_model[features]
+    X_scaled = StandardScaler().fit_transform(X)
+
+    kmeans = KMeans(n_clusters=3, random_state=42)
+    s3_model["Cluster"] = kmeans.fit_predict(X_scaled)
+
+    st.dataframe(s3_model[["BucketName", "Region", "CostUSD", "TotalSizeGB", "Cluster"]])
+
+    fig, ax = plt.subplots()
+    sns.scatterplot(
+        data=s3_model, x="TotalSizeGB", y="CostUSD", hue="Cluster", palette="Set2", ax=ax
+    )
+    ax.set_title("S3 Cost vs Size (Clustered Patterns)")
+    st.pyplot(fig)
+
+    high_cost_cluster = s3_model.groupby("Cluster")["CostUSD"].mean().idxmax()
+    st.info(f"💡 Buckets in Cluster {high_cost_cluster} have the highest average cost — consider deeper analysis.")
+else:
+    st.warning("Not enough S3 data to perform clustering.")
