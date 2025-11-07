@@ -3,6 +3,9 @@ import numpy as np
 import streamlit as st
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, r2_score
 
 # -------------------------------------
 # 1. LOAD DATA
@@ -211,3 +214,48 @@ if not large_insecure.empty or not old_costly.empty:
         )
 else:
     st.success("✅ All S3 buckets appear properly encrypted, current, and within cost norms.")
+
+
+st.header("🤖 EC2 Cost Prediction Model")
+
+# Select numeric features
+features = ["CPUUtilization", "MemoryUtilization", "NetworkIn_Bps", "NetworkOut_Bps"]
+df_model = ec2_filtered.dropna(subset=features + ["CostUSD"])
+
+if len(df_model) > 5:
+    X = df_model[features]
+    y = df_model["CostUSD"]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    mae = mean_absolute_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+
+    st.metric("Model R²", f"{r2:.2f}")
+    st.metric("Mean Absolute Error", f"${mae:.2f}")
+
+    # Interactive prediction
+    st.subheader("🔮 Predict EC2 Cost from Utilization")
+    cpu = st.slider("CPU Utilization (%)", 0, 100, 60)
+    mem = st.slider("Memory Utilization (%)", 0, 100, 60)
+    net_in = st.number_input("Network In (Bps)", 0, 10_000_000, 500_000)
+    net_out = st.number_input("Network Out (Bps)", 0, 10_000_000, 250_000)
+
+    predicted_cost = model.predict([[cpu, mem, net_in, net_out]])[0]
+    st.success(f"💰 Predicted Monthly Cost: **${predicted_cost:.2f}**")
+
+    # Visualization of model fit
+    fig, ax = plt.subplots()
+    ax.scatter(y_test, y_pred, color="blue", alpha=0.7)
+    ax.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], "r--")
+    ax.set_xlabel("Actual Cost")
+    ax.set_ylabel("Predicted Cost")
+    ax.set_title("Model Fit: Actual vs Predicted EC2 Cost")
+    st.pyplot(fig)
+
+else:
+    st.warning("Not enough EC2 data for model training.")
